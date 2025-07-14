@@ -1,0 +1,8 @@
+[package]
+name = "aspecky/tableutils"
+version = "8.2.0"
+registry = "https://github.com/UpliftGames/wally-index"
+realm = "shared"
+description = "Useful table utilities"
+
+[dependencies]

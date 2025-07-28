@@ -5,13 +5,6 @@ local Packages = ReplicatedStorage.Packages
 
 local Knit = require(Packages.Knit)
 
-local success = pcall(StarterGui.SetCoreGuiEnabled, StarterGui, "All")
-
-while not success do
-    success = pcall(StarterGui.SetCoreGuiEnabled, StarterGui, "All", false)
-    task.wait()
-end
-
 do
     Knit.AddControllersDeep(script.Parent.Controllers)
 

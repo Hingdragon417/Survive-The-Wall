@@ -1,24 +1,19 @@
---// Services
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
---// Packages
 local Knit = require(ReplicatedStorage.Packages.Knit)
 local ProfileStore = require(ReplicatedStorage.Packages.ProfileStore)
 local TableUtil = require(ReplicatedStorage.Packages.TableUtil)
 local Signal = require(ReplicatedStorage.Packages.Signal)
 
---// Shared
 local Shared = ReplicatedStorage.Shared
-local Types = require(Shared.Types)
 local DATA_TEMPLATE = require(Shared.Data.Template)
 
---// Constants
 local IS_STUDIO = RunService:IsStudio()
-local STORE_NAME = if IS_STUDIO then "TESTSTUDIO11111" else "TESTGAME11111"
-local STORE_VERSION = if IS_STUDIO then "1.2.7" else "1.1.0"
-local METADATA_INDEX_VERSION = if IS_STUDIO then "STUDIO_DATA_VERSION" else "GAME_DATA_VERSION"
+local STORE_NAME = IS_STUDIO and "TESTSTUDIO111111" or "TESTGAME11111"
+local STORE_VERSION = IS_STUDIO and "1.2.7" or "1.1.0"
+local METADATA_INDEX_VERSION = IS_STUDIO and "STUDIO_DATA_VERSION" or "GAME_DATA_VERSION"
 local SHOULD_SAVE = true
 
 local MAX_RETRIES = 10
@@ -31,33 +26,88 @@ local DataService = Knit.CreateService({
 	},
 })
 
-function DataService.clearSession(player: Player)
-	DataService._cache[player] = nil
+function DataService:getNested(data, path)
+	for _, key in ipairs(path) do
+		data = data and data[key]
+	end
+	return data
 end
 
-function DataService.setSession(player: Player, session: Types.Session)
-	DataService._cache[player] = session
+function DataService:Replicate(player, index)
+	local session = self:getSession(player)
+	if not session or not session.Data then return end
+
+	local data = session.Data
+
+	if not index then
+		self.Client.ReplicateData:Fire(player, data)
+		for key, value in pairs(data.leaderstats or {}) do
+			if value ~= nil then
+				self.Client.ReplicateData:Fire(player, value, key)
+			end
+		end
+	elseif typeof(index) == "string" then
+		local val = data[index] or (data.leaderstats and data.leaderstats[index])
+		if val ~= nil then
+			self.Client.ReplicateData:Fire(player, val, index)
+		end
+	elseif typeof(index) == "table" then
+		local val = self:getNested(data, index)
+		if val ~= nil then
+			local key = index[#index]
+			self.Client.ReplicateData:Fire(player, val, key)
+		end
+	end
 end
 
-function DataService.getSession(player: Player)
-	return DataService._cache[player]
+function DataService:createLeaderstats(player, data)
+	local folder = Instance.new("Folder")
+	folder.Name = "leaderstats"
+	folder.Parent = player
+
+	local stats = data.leaderstats or {}
+
+	for key, value in pairs(stats) do
+		local val = typeof(value) == "number" and Instance.new("IntValue") or typeof(value) == "string" and Instance.new("StringValue")
+		if val then
+			val.Name = key
+			val.Value = value
+			val.Parent = folder
+
+			val:GetPropertyChangedSignal("Value"):Connect(function()
+				stats[key] = val.Value
+				self:Replicate(player, { "leaderstats", key })
+			end)
+		end
+	end
 end
 
-function DataService.waitForSession(player: Player, timeout: number?)
+function DataService:setSession(player, session)
+	self._cache[player] = session
+end
+
+function DataService:getSession(player)
+	return self._cache[player]
+end
+
+function DataService:clearSession(player)
+	self._cache[player] = nil
+end
+
+function DataService.waitForSession(player, timeout)
 	timeout = timeout or 60
-
 	local start = os.clock()
-	local session = DataService.getSession(player)
+	local session = DataService:getSession(player)
 
 	while not session and (os.clock() - start < timeout) do
 		task.wait()
-		session = DataService.getSession(player)
+		session = DataService:getSession(player)
 	end
 
 	return session
 end
 
-function DataService.onPlayerAdded(player: Player)
+function DataService.onPlayerAdded(player)
 	local userId = tostring(player.UserId)
 	local session
 
@@ -68,10 +118,7 @@ function DataService.onPlayerAdded(player: Player)
 			end,
 		})
 
-		if session then
-			break
-		end
-
+		if session then break end
 		task.wait(RETRY_DELAY)
 	end
 
@@ -96,57 +143,28 @@ function DataService.onPlayerAdded(player: Player)
 
 	session:Reconcile()
 
-	DataService._cache[player] = session
-
+	DataService:setSession(player, session)
 	DataService:Replicate(player)
+	DataService:createLeaderstats(player, session.Data)
 end
 
-function DataService:Replicate(player: Player, index: (string | { string })?)
-	local currentSession = self.getSession(player)
-
-	if currentSession then
-		local data = currentSession.Data
-
-		if data then
-			if index then
-				if type(index) == "string" then
-					self.Client.ReplicateData:Fire(player, data[index], index)
-				elseif type(index) == "table" then
-					for _, idx in index do
-						self.Client.ReplicateData:Fire(player, data[idx], idx)
-					end
-				end
-			else
-				self.Client.ReplicateData:Fire(player, data)
-			end
-		end
-	end
-end
-
-function DataService.onPlayerRemoving(player: Player)
-	local currentSession = DataService.getSession(player)
-
-	if currentSession then
+function DataService.onPlayerRemoving(player)
+	local session = DataService:getSession(player)
+	if session then
 		DataService._onPlayerRemoving:Fire(player)
-
-		currentSession:EndSession()
-
-		DataService.clearSession(player)
+		session:EndSession()
+		DataService:clearSession(player)
 	end
 end
 
-function DataService:OnPlayerRemoving(player: Player, callback: () -> nil)
+function DataService:OnPlayerRemoving(player, callback)
 	local connection
-
-	connection = self._onPlayerRemoving:Connect(function(_player: Player)
-		if player == _player then
+	connection = self._onPlayerRemoving:Connect(function(p)
+		if p == player then
 			callback()
-
 			connection:Disconnect()
-			connection = nil
 		end
 	end)
-
 	return connection
 end
 
@@ -155,13 +173,17 @@ function DataService:KnitInit()
 	self._cache = {}
 	self._onPlayerRemoving = Signal.new()
 
-	Players.PlayerAdded:Connect(self.onPlayerAdded)
-	Players.PlayerRemoving:Connect(self.onPlayerRemoving)
+	Players.PlayerAdded:Connect(function(player)
+		self.onPlayerAdded(player)
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		self.onPlayerRemoving(player)
+	end)
 
 	for _, player in Players:GetPlayers() do
 		task.spawn(self.onPlayerAdded, player)
 	end
-
 end
 
 return DataService
